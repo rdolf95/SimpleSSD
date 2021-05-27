@@ -43,6 +43,7 @@ const char NAME_INITIAL_BIT_PER_ERROR[] = "InitialBitPerError";
 const char NAME_FINAL_BIT_PER_ERROR[] = "FinalBitPerError";
 
 const char NAME_BER_SIGMA[] = "BERSigma";
+const char NAME_LRU_WINDOW_SIZE[] = "LRUWindowSize";
 
 Config::Config() {
   mapping = PAGE_MAPPING;
@@ -62,6 +63,7 @@ Config::Config() {
   initialBER = 10^(-12);
   finalBER = 10^(-3);
   normalSigma = 1;
+  lruWindowSize = 200;
 }
 
 bool Config::setConfig(const char *name, const char *value) {
@@ -116,6 +118,9 @@ bool Config::setConfig(const char *name, const char *value) {
   else if (MATCH_NAME(NAME_BER_SIGMA)) {
     normalSigma = strtof(value, nullptr);
   }
+  else if (MATCH_NAME(NAME_LRU_WINDOW_SIZE)) {
+    lruWindowSize = strtoul(value, nullptr, 10);
+  }
 
   else {
     ret = false;
@@ -154,6 +159,9 @@ int64_t Config::readInt(uint32_t idx) {
       break;
     case FTL_GC_EVICT_POLICY:
       ret = evictPolicy;
+      break;
+    case FTL_LRU_MAX:
+      ret = lruWindowSize;
       break;
   }
 
@@ -210,6 +218,7 @@ float Config::readFloat(uint32_t idx) {
     case FTL_BER_SIGMA:
       ret = normalSigma;
       break;
+ 
   }
 
   return ret;

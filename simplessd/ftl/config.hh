@@ -50,6 +50,9 @@ typedef enum {
   FTL_INITIAL_BER,
   FTL_FINAL_BER,
   FTL_BER_SIGMA,
+
+  /*LRU window*/
+  FTL_LRU_MAX,
 } FTL_CONFIG;
 
 typedef enum {
@@ -94,6 +97,9 @@ class Config : public BaseConfig {
   float initialBER;            //!< Default: 10^-12
   float finalBER;              //!< Default: 10^-3
   float normalSigma;               //!< Default: 1
+
+  //Config for LRU window
+  uint64_t lruWindowSize;
 
  public:
   Config();

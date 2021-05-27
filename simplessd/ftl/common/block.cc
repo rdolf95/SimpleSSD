@@ -36,7 +36,7 @@ Block::Block(uint32_t blockIdx, uint32_t count, uint32_t ioUnit)
       ppLPNs(nullptr),
       lastAccessed(0),
       eraseCount(0),
-      bitErrorCount(0),
+      bitErrorCount(1),
       errorTableIndex(0) {
   if (ioUnitInPage == 1) {
     pValidBits = new Bitset(pageCount);
@@ -88,6 +88,8 @@ Block::Block(const Block &old)
          ioUnitInPage * sizeof(uint32_t));
 
   eraseCount = old.eraseCount;
+  bitErrorCount = old.bitErrorCount;
+  errorTableIndex = old.errorTableIndex;
 }
 
 Block::Block(Block &&old) noexcept
@@ -102,7 +104,9 @@ Block::Block(Block &&old) noexcept
       erasedBits(std::move(old.erasedBits)),
       ppLPNs(std::move(old.ppLPNs)),
       lastAccessed(std::move(old.lastAccessed)),
-      eraseCount(std::move(old.eraseCount)) {
+      eraseCount(std::move(old.eraseCount)),
+      bitErrorCount(std::move(old.bitErrorCount)),
+      errorTableIndex(std::move(old.errorTableIndex)) {
   // TODO Use std::exchange to set old value to null (C++14)
   old.idx = 0;
   old.pageCount = 0;
@@ -114,6 +118,8 @@ Block::Block(Block &&old) noexcept
   old.ppLPNs = nullptr;
   old.lastAccessed = 0;
   old.eraseCount = 0;
+  old.bitErrorCount = 0;
+  old.errorTableIndex = 0;
 }
 
 Block::~Block() {
@@ -258,7 +264,10 @@ uint32_t Block::getNextWritePageIndex(uint32_t idx) {
 bool Block::getPageInfo(uint32_t pageIndex, std::vector<uint64_t> &lpn,
                         Bitset &map) {
   if (ioUnitInPage == 1 && map.size() == 1) {
-    map.set();
+    map.reset();
+    if (pValidBits->test(pageIndex)) {
+      map.set();
+    }
     lpn = std::vector<uint64_t>(1, pLPNs[pageIndex]);
   }
   else if (map.size() == ioUnitInPage) {

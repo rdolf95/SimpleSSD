@@ -72,6 +72,12 @@ class PageMapping : public AbstractFTL {
   std::vector<std::pair<std::list<Block>, std::list<uint32_t>>>
       errorCountTable;
 
+  // LRU window for hot/cold identification
+  // list of (LBA, access count)
+  std::list<std::pair<uint32_t, uint32_t>> lruWindow;
+  uint32_t lruAverage;
+  uint32_t lruWindowSize;
+
   // BER data
   double initialBER;
   double finalBER;
@@ -99,6 +105,8 @@ class PageMapping : public AbstractFTL {
   void eraseInternal2(PAL::Request &, uint64_t &);
 
   void readInternal2(Request &, uint64_t &);
+  void writeInternal2(Request &, uint64_t &, bool = true);
+  void updateLRU(uint32_t);
 
  public:
   PageMapping(ConfigReader &, Parameter &, PAL::PAL *, DRAM::AbstractDRAM *);

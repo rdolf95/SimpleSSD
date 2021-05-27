@@ -37,7 +37,8 @@ PageMapping::PageMapping(ConfigReader &c, Parameter &p, PAL::PAL *l,
       conf(c),
       lastFreeBlock(param.pageCountToMaxPerf),
       lastFreeBlockIOMap(param.ioUnitInPage),
-      bReclaimMore(false){
+      bReclaimMore(false),
+      lruAverage(0){
   blocks.reserve(param.totalPhysicalBlocks);
   table.reserve(param.totalLogicalBlocks * param.pagesInBlock);
 
@@ -53,8 +54,9 @@ PageMapping::PageMapping(ConfigReader &c, Parameter &p, PAL::PAL *l,
     errorCountTable.push_back(make_pair(freeList, validList));
   }
   for (uint32_t i = 0; i < param.totalPhysicalBlocks; i++) {
-    errorCountTable[0].first.emplace_back(Block(i, param.pagesInBlock, param.ioUnitInPage));
+    errorCountTable[1].first.emplace_back(Block(i, param.pagesInBlock, param.ioUnitInPage));
   }
+  lruWindowSize = conf.readInt(CONFIG_FTL, FTL_LRU_MAX);
 
   nFreeBlocks = param.totalPhysicalBlocks;
 
@@ -128,7 +130,7 @@ bool PageMapping::initialize() {
     for (uint64_t i = 0; i < nPagesToWarmup; i++) {
       tick = 0;
       req.lpn = i;
-      writeInternal(req, tick, false);
+      writeInternal2(req, tick, false);
     }
   }
   else {
@@ -140,7 +142,7 @@ bool PageMapping::initialize() {
     for (uint64_t i = 0; i < nPagesToWarmup; i++) {
       tick = 0;
       req.lpn = dist(gen);
-      writeInternal(req, tick, false);
+      writeInternal2(req, tick, false);
     }
   }
   // Step 2. Invalidating
@@ -149,7 +151,7 @@ bool PageMapping::initialize() {
     for (uint64_t i = 0; i < nPagesToInvalidate; i++) {
       tick = 0;
       req.lpn = i;
-      writeInternal(req, tick, false);
+      writeInternal2(req, tick, false);
     }
   }
   else if (mode == FILLING_MODE_1) {
@@ -163,7 +165,7 @@ bool PageMapping::initialize() {
     for (uint64_t i = 0; i < nPagesToInvalidate; i++) {
       tick = 0;
       req.lpn = dist(gen);
-      writeInternal(req, tick, false);
+      writeInternal2(req, tick, false);
     }
   }
   else {
@@ -175,7 +177,7 @@ bool PageMapping::initialize() {
     for (uint64_t i = 0; i < nPagesToInvalidate; i++) {
       tick = 0;
       req.lpn = dist(gen);
-      writeInternal(req, tick, false);
+      writeInternal2(req, tick, false);
     }
   }
 
@@ -219,7 +221,7 @@ void PageMapping::write(Request &req, uint64_t &tick) {
   uint64_t begin = tick;
 
   if (req.ioFlag.count() > 0) {
-    writeInternal(req, tick);
+    writeInternal2(req, tick);
 
     debugprint(LOG_FTL_PAGE_MAPPING,
                "WRITE | LPN %" PRIu64 " | %" PRIu64 " - %" PRIu64 " (%" PRIu64
@@ -416,7 +418,7 @@ uint32_t PageMapping::getFreeBlock2(uint16_t errorIdx) {
   }
 
   // Find free block with more than errorIdx
-  auto tableIter = errorCountTable.begin() + errorIdx;
+  auto tableIter = errorCountTable.begin() + errorIdx + 1;
   while (tableIter->first.empty())
   {
     tableIter ++;
@@ -436,17 +438,30 @@ uint32_t PageMapping::getFreeBlock2(uint16_t errorIdx) {
     uint32_t errorCount = tableIter->first.front().getBitErrorCount();
     tableIter->first.front().updateErrorTableIndex(errorCount);
 
+    //debugprint(LOG_FTL_PAGE_MAPPING, "intended error count : %d",errorCount);
+
     // Insert found block to valid block list
     auto newTableIter = errorCountTable.begin() + errorCount;
-    newTableIter->second.emplace_back(std::move(tableIter->first.front().getBlockIndex()));
+    newTableIter->second.emplace_back(blockIndex);
+
+    //debugprint(LOG_FTL_PAGE_MAPPING, "in error count table index : %d",errorCountTable[errorCount].second.back());
 
     
     if (blocks.find(blockIndex) != blocks.end()) {
       panic("Corrupted");
     }
 
-    blocks.emplace(blockIndex, std::move(tableIter->first.front()));
+   // debugprint(LOG_FTL_PAGE_MAPPING, "before emplace block index : %d",tableIter->first.front().getBlockIndex());
+    //debugprint(LOG_FTL_PAGE_MAPPING, "before emplace error count : %d",tableIter->first.front().getErrorTableIndex());
 
+
+    //blocks.emplace(blockIndex, Block(tableIter->first.front()));
+    blocks.emplace(blockIndex, std::move(tableIter->first.front()));
+    //blocks.emplace(blockIndex, tableIter->first.front());
+
+
+    //debugprint(LOG_FTL_PAGE_MAPPING, "in meta block index : %d",blocks.find(blockIndex)->second.getBlockIndex());
+    //debugprint(LOG_FTL_PAGE_MAPPING, "in meta error count : %d",blocks.find(blockIndex)->second.getErrorTableIndex());
 
 
     // Remove found block from free block list
@@ -797,6 +812,7 @@ void PageMapping::readInternal2(Request &req, uint64_t &tick) {
   uint64_t beginAt;
   uint64_t finishedAt = tick;
 
+  /*
   // BER modeling data  
   static uint64_t eraseThreshold =
       conf.readUint(CONFIG_FTL, FTL_BAD_BLOCK_THRESHOLD);
@@ -812,13 +828,12 @@ void PageMapping::readInternal2(Request &req, uint64_t &tick) {
   uint32_t errorCount;
   float averageError;
   float temp;
-
+  */
   //debugprint(LOG_FTL_PAGE_MAPPING, "threshold: %d", eraseThreshold);
   //debugprint(LOG_FTL_PAGE_MAPPING, "initial BER: %.12lf", initialBER);
   //debugprint(LOG_FTL_PAGE_MAPPING, "final BER: %lf", finalBER);
-  //debugprint(LOG_FTL_PAGE_MAPPING, "BER sigma: %lf", sigma);
-  //ssdfsdfsdfds
-  
+  //debugprint(LOG_FTL_PAGE_MAPPING, "BER sigma: %lf", sigma);    
+  updateLRU(req.lpn);
   auto mappingList = table.find(req.lpn);
 
   if (mappingList != table.end()) {
@@ -858,11 +873,11 @@ void PageMapping::readInternal2(Request &req, uint64_t &tick) {
           pPAL->read(palRequest, beginAt);
 
           finishedAt = MAX(finishedAt, beginAt);
-          
+          /*
           // TODO: error should be updated only right after write.
-
+          
           averageError = (finalBER - initialBER)/eraseThreshold
-                         * (block->second.getEraseCount()) + initialBER;
+                        * (block->second.getEraseCount()) + initialBER;
           averageError = averageError * param.pageSize * 8;
           std::normal_distribution<double> normal(averageError,sigma);
 
@@ -878,8 +893,13 @@ void PageMapping::readInternal2(Request &req, uint64_t &tick) {
           //debugprint(LOG_FTL_PAGE_MAPPING, "rand var: %.12lf", temp);
           // Keep maximum error count ever seen
           errorCount = MAX(static_cast<uint32_t>(temp + 0.5), block->second.getBitErrorCount());
+          if(errorCount>=128){
+            errorCount = 127;
+          }
           //debugprint(LOG_FTL_PAGE_MAPPING, "cur error count: %u", errorCount);
           block->second.updateError(errorCount);
+          */
+
         }
       }
     }
@@ -1029,6 +1049,189 @@ void PageMapping::writeInternal(Request &req, uint64_t &tick, bool sendToPAL) {
   }
 }
 
+void PageMapping::writeInternal2(Request &req, uint64_t &tick, bool sendToPAL) {
+  PAL::Request palRequest(req);
+  std::unordered_map<uint32_t, Block>::iterator block;
+  auto mappingList = table.find(req.lpn);
+  uint64_t beginAt;
+  uint64_t finishedAt = tick;
+  bool readBeforeWrite = false;
+
+  // BER modeling data  
+  static uint64_t eraseThreshold =
+      conf.readUint(CONFIG_FTL, FTL_BAD_BLOCK_THRESHOLD);
+  static float initialBER =
+      conf.readFloat(CONFIG_FTL, FTL_INITIAL_BER);
+  static float finalBER =
+      conf.readFloat(CONFIG_FTL, FTL_FINAL_BER);
+  static float sigma =
+      conf.readFloat(CONFIG_FTL, FTL_BER_SIGMA);
+
+  // BER modeling random generator
+  std::random_device generator;
+  uint32_t errorCount;
+  float averageError;
+  float temp;
+  
+  updateLRU(req.lpn);
+
+  if (mappingList != table.end()) {
+    for (uint32_t idx = 0; idx < bitsetSize; idx++) {
+      if (req.ioFlag.test(idx) || !bRandomTweak) {
+        auto &mapping = mappingList->second.at(idx);
+
+        if (mapping.first < param.totalPhysicalBlocks &&
+            mapping.second < param.pagesInBlock) {
+          block = blocks.find(mapping.first);
+
+          // Invalidate current page
+          block->second.invalidate(mapping.second, idx);
+        }
+      }
+    }
+  }
+  else {
+    // Create empty mapping
+    auto ret = table.emplace(
+        req.lpn,
+        std::vector<std::pair<uint32_t, uint32_t>>(
+            bitsetSize, {param.totalPhysicalBlocks, param.pagesInBlock}));
+
+    if (!ret.second) {
+      panic("Failed to insert new mapping");
+    }
+
+    mappingList = ret.first;
+  }
+
+  // Write data to free block
+  block = blocks.find(getLastFreeBlock(req.ioFlag));
+
+  if (block == blocks.end()) {
+    panic("No such block");
+  }
+
+  if (sendToPAL) {
+    if (bRandomTweak) {
+      pDRAM->read(&(*mappingList), 8 * req.ioFlag.count(), tick);
+      pDRAM->write(&(*mappingList), 8 * req.ioFlag.count(), tick);
+    }
+    else {
+      pDRAM->read(&(*mappingList), 8, tick);
+      pDRAM->write(&(*mappingList), 8, tick);
+    }
+  }
+
+  if (!bRandomTweak && !req.ioFlag.all()) {
+    // We have to read old data
+    readBeforeWrite = true;
+  }
+
+  for (uint32_t idx = 0; idx < bitsetSize; idx++) {
+    if (req.ioFlag.test(idx) || !bRandomTweak) {
+      uint32_t pageIndex = block->second.getNextWritePageIndex(idx);
+      auto &mapping = mappingList->second.at(idx);
+
+      beginAt = tick;
+
+      block->second.write(pageIndex, req.lpn, idx, beginAt);
+
+      // Read old data if needed (Only executed when bRandomTweak = false)
+      // Maybe some other init procedures want to perform 'partial-write'
+      // So check sendToPAL variable
+      if (readBeforeWrite && sendToPAL) {
+        palRequest.blockIndex = mapping.first;
+        palRequest.pageIndex = mapping.second;
+
+        // We don't need to read old data
+        palRequest.ioFlag = req.ioFlag;
+        palRequest.ioFlag.flip();
+
+        pPAL->read(palRequest, beginAt);
+      }
+
+      // update mapping to table
+      mapping.first = block->first;
+      mapping.second = pageIndex;
+
+      if (sendToPAL) {
+        palRequest.blockIndex = block->first;
+        palRequest.pageIndex = pageIndex;
+
+        if (bRandomTweak) {
+          palRequest.ioFlag.reset();
+          palRequest.ioFlag.set(idx);
+        }
+        else {
+          palRequest.ioFlag.set();
+        }
+
+        pPAL->write(palRequest, beginAt);
+        pPAL->read(palRequest, beginAt);
+      }
+
+       averageError = (finalBER - initialBER)/eraseThreshold
+                        * (block->second.getEraseCount()) + initialBER;
+          averageError = averageError * param.pageSize * 8;
+          std::normal_distribution<double> normal(averageError,sigma);
+
+          // Dillema : Is it okay to use maximum error count?
+          // What if very huge value is selected at first?
+          // Remove negative value
+          temp = normal(generator);
+          if (temp < 0){
+            temp = 0;
+          }
+
+          //debugprint(LOG_FTL_PAGE_MAPPING, "average error: %.12lf", averageError);
+          //debugprint(LOG_FTL_PAGE_MAPPING, "rand var: %.12lf", temp);
+          // Keep maximum error count ever seen
+          errorCount = MAX(static_cast<uint32_t>(temp + 0.5), block->second.getBitErrorCount());
+          if(errorCount>=128){
+            errorCount = 127;
+          }
+          //debugprint(LOG_FTL_PAGE_MAPPING, "cur error count: %u", errorCount);
+          block->second.updateError(errorCount);
+
+      finishedAt = MAX(finishedAt, beginAt);
+    }
+  }
+
+  // Exclude CPU operation when initializing
+  if (sendToPAL) {
+    tick = finishedAt;
+    tick += applyLatency(CPU::FTL__PAGE_MAPPING, CPU::WRITE_INTERNAL);
+    //tick += applyLatency(CPU::FTL__PAGE_MAPPING, CPU::READ_INTERNAL);
+  }
+
+  // GC if needed
+  // I assumed that init procedure never invokes GC
+  static float gcThreshold = conf.readFloat(CONFIG_FTL, FTL_GC_THRESHOLD_RATIO);
+
+  if (freeBlockRatio() < gcThreshold) {
+    if (!sendToPAL) {
+      panic("ftl: GC triggered while in initialization");
+    }
+
+    std::vector<uint32_t> list;
+    uint64_t beginAt = tick;
+
+    selectVictimBlock(list, beginAt);
+
+    debugprint(LOG_FTL_PAGE_MAPPING,
+               "GC   | On-demand | %u blocks will be reclaimed", list.size());
+
+    doGarbageCollection(list, beginAt);
+
+    debugprint(LOG_FTL_PAGE_MAPPING,
+               "GC   | Done | %" PRIu64 " - %" PRIu64 " (%" PRIu64 ")", tick,
+               beginAt, beginAt - tick);
+
+    stat.gcCount++;
+    stat.reclaimedBlocks += list.size();
+  }
+}
+
 void PageMapping::trimInternal(Request &req, uint64_t &tick) {
   auto mappingList = table.find(req.lpn);
 
@@ -1115,6 +1318,8 @@ void PageMapping::eraseInternal2(PAL::Request &req, uint64_t &tick) {
   static uint64_t threshold =
       conf.readUint(CONFIG_FTL, FTL_BAD_BLOCK_THRESHOLD);
   auto block = blocks.find(req.blockIndex);
+  //debugprint(LOG_FTL_PAGE_MAPPING, "req blockIndex : %d", req.blockIndex);
+  //debugprint(LOG_FTL_PAGE_MAPPING, "found blockIndex : %d", block->second.getBlockIndex());
 
   // Sanity checks
   if (block == blocks.end()) {
@@ -1125,30 +1330,40 @@ void PageMapping::eraseInternal2(PAL::Request &req, uint64_t &tick) {
     panic("There are valid pages in victim block");
   }
 
+
+  // Check error count
+  uint32_t blockIdx = block->second.getBlockIndex();
+  uint32_t errorCount = block->second.getBitErrorCount();
+  uint32_t errorTableIndex = block->second.getErrorTableIndex();
+
   // Erase block
   block->second.erase();
 
   pPAL->erase(req, tick);
 
-  // Check error count
-  uint32_t erasedCount = block->second.getEraseCount();
-  uint32_t errorCount = block->second.getBitErrorCount();
-  auto tableIter = errorCountTable.begin() + errorCount;
 
+  uint32_t erasedCount = block->second.getEraseCount();
+  //debugprint(LOG_FTL_PAGE_MAPPING, "error count :%d",errorCount);
+  auto tableIter = errorCountTable.begin() + errorCount;
   if (erasedCount < threshold) {
     // Push to back of free list
     tableIter->first.emplace_back(std::move(block->second));
+    //debugprint(LOG_FTL_PAGE_MAPPING, "check emplacing: index :%d",tableIter->first.back().getBlockIndex());
   }
 
   // Remove block from available block list
   // First find block from valid list
-  uint32_t errorTableIndex = block->second.getErrorTableIndex();
+  //debugprint(LOG_FTL_PAGE_MAPPING, "find block with index :%d",blockIdx);
+  //debugprint(LOG_FTL_PAGE_MAPPING, "error table index :%d",errorTableIndex);
+  //debugprint(LOG_FTL_PAGE_MAPPING, "error count table[errorTableIndex] first:%d",errorCountTable[errorTableIndex].second.front());
   auto iter = errorCountTable[errorTableIndex].second.begin();
-  
   while(iter != errorCountTable[errorTableIndex].second.end()){
-    if(*iter == block->second.getBlockIndex()){
+    //debugprint(LOG_FTL_PAGE_MAPPING, "iter : %d", *iter);
+    if(*iter == blockIdx){
+      //debugprint(LOG_FTL_PAGE_MAPPING, "found block from valid list");
       break;
     }
+    iter++;
   }
 
   // Sanity check
@@ -1156,14 +1371,62 @@ void PageMapping::eraseInternal2(PAL::Request &req, uint64_t &tick) {
   {
     panic("Block is lost in availabe list");
   }
-  
+  //debugprint(LOG_FTL_PAGE_MAPPING, "erase from valid list");
   // Erase from valid list and metadata list
   iter = errorCountTable[errorTableIndex].second.erase(iter);
   blocks.erase(block);
 
   nFreeBlocks++;
-
+  //debugprint(LOG_FTL_PAGE_MAPPING, "erase internal done");
   tick += applyLatency(CPU::FTL__PAGE_MAPPING, CPU::ERASE_INTERNAL);
+}
+
+void PageMapping::updateLRU(uint32_t lpn){
+  // Find lpn in lru window
+  auto lruIter = lruWindow.begin();
+  uint32_t lbn = lpn / param.totalLogicalBlocks;
+
+  while (lruIter != lruWindow.end())
+  {
+    if (lruIter->first == lbn)
+    {
+      break;
+    }
+    lruIter++;
+  }
+
+  if(lruIter != lruWindow.end()){
+    // Found in window, erase and push to MRU position (back of window)
+    std::pair<uint32_t, uint32_t> newEntry 
+        = std::make_pair(lruIter->first,lruIter->second + 1);
+
+    lruIter = lruWindow.erase(lruIter);
+    // Update average
+    uint32_t countSum = 0;
+    lruWindow.push_back(newEntry);
+    for(auto &entry : lruWindow){
+        countSum = countSum + entry.second;
+      }
+    lruAverage = countSum / lruWindow.size();
+  }
+  else{
+    // Not found in window, push new one to MRU position (back of window)
+    std::pair<uint32_t, uint32_t> newEntry 
+        = std::make_pair(lbn, 1);
+    lruWindow.push_back(newEntry);
+
+    // If window is full, evict LRU position entry, halve the counters
+    if(lruWindowSize < lruWindow.size()){
+      lruWindow.pop_front();
+      
+      uint32_t countSum = 0;
+      for(auto &entry : lruWindow){
+        entry.second = entry.second / 2;
+        countSum = countSum + entry.second;
+      }
+      lruAverage = countSum / lruWindow.size();
+    }
+  }
 }
 
 float PageMapping::calculateWearLeveling() {
@@ -1235,6 +1498,14 @@ void PageMapping::getStatList(std::vector<Stats> &list, std::string prefix) {
   temp.name = prefix + "page_mapping.wear_leveling";
   temp.desc = "Wear-leveling factor";
   list.push_back(temp);
+
+  temp.name = prefix + "page_mapping.LRU_size";
+  temp.desc = "number of blocks in LRU window";
+  list.push_back(temp);
+
+  temp.name = prefix + "page_mapping.LRU_average";
+  temp.desc = "LRU window counter average";
+  list.push_back(temp);
 }
 
 void PageMapping::getStatValues(std::vector<double> &values) {
@@ -1243,6 +1514,8 @@ void PageMapping::getStatValues(std::vector<double> &values) {
   values.push_back(stat.validSuperPageCopies);
   values.push_back(stat.validPageCopies);
   values.push_back(calculateWearLeveling());
+  values.push_back(lruWindow.size());
+  values.push_back(lruAverage);
 }
 
 void PageMapping::resetStatValues() {
