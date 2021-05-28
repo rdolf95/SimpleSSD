@@ -86,6 +86,8 @@ class PageMapping : public AbstractFTL {
   uint32_t vulBlockCount;
   uint32_t badBlockCount;
   uint32_t testCount = 0;
+  uint64_t hotCount = 0;
+  uint64_t coldCount = 0;
 
   // BER data
   double initialBER;

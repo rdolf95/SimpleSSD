@@ -1324,8 +1324,8 @@ void PageMapping::eraseInternal(PAL::Request &req, uint64_t &tick) {
 }
 
 void PageMapping::eraseInternal2(PAL::Request &req, uint64_t &tick) {
-  static uint64_t threshold =
-      conf.readUint(CONFIG_FTL, FTL_BAD_BLOCK_THRESHOLD);
+  //static uint64_t threshold =
+  //    conf.readUint(CONFIG_FTL, FTL_BAD_BLOCK_THRESHOLD);
   auto block = blocks.find(req.blockIndex);
 
   // Sanity checks
@@ -1455,6 +1455,16 @@ uint32_t PageMapping::updateLRU(uint32_t lpn){
       // New block is always cold
     }
   }
+
+  if (isHot == 1)
+  {
+    hotCount ++;
+  }
+  else{
+    coldCount ++;
+  }
+  
+
   return isHot;
 }
 
@@ -1536,6 +1546,14 @@ void PageMapping::getStatList(std::vector<Stats> &list, std::string prefix) {
   temp.desc = "LRU window counter average";
   list.push_back(temp);
 
+  temp.name = prefix + "page_mapping.LRU_hot_count";
+  temp.desc = "LRU hot data count";
+  list.push_back(temp);
+
+  temp.name = prefix + "page_mapping.LRU_cold_count";
+  temp.desc = "LRU cold data count";
+  list.push_back(temp);
+
   temp.name = prefix + "page_mapping.strong_boundary";
   temp.desc = "Strong boundary";
   list.push_back(temp);
@@ -1555,6 +1573,8 @@ void PageMapping::getStatValues(std::vector<double> &values) {
   values.push_back(calculateWearLeveling());
   values.push_back(lruWindow.size());
   values.push_back(lruAverage);
+  values.push_back(hotCount);
+  values.push_back(coldCount);
   values.push_back(wearLevelingStat.strongBoundary);
 
   for(uint32_t i = 0; i < 128; i++){
