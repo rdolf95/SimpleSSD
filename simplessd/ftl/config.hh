@@ -46,13 +46,17 @@ typedef enum {
   FTL_NKMAP_N,
   FTL_NKMAP_K,
 
-  /* BER Modeling*/
+  /* BER Modeling */
   FTL_INITIAL_BER,
   FTL_FINAL_BER,
   FTL_BER_SIGMA,
 
-  /*LRU window*/
+  /* LRU window */
   FTL_LRU_MAX,
+
+  /* ECC capability */
+  FTL_ECC_CAPABILITY,
+
 } FTL_CONFIG;
 
 typedef enum {
@@ -100,6 +104,9 @@ class Config : public BaseConfig {
 
   //Config for LRU window
   uint64_t lruWindowSize;
+
+  //Config for ECC capability
+  uint64_t eccCapability;
 
  public:
   Config();

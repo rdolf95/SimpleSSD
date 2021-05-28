@@ -36,7 +36,7 @@ Block::Block(uint32_t blockIdx, uint32_t count, uint32_t ioUnit)
       ppLPNs(nullptr),
       lastAccessed(0),
       eraseCount(0),
-      bitErrorCount(1),
+      bitErrorCount(0),
       errorTableIndex(0) {
   if (ioUnitInPage == 1) {
     pValidBits = new Bitset(pageCount);

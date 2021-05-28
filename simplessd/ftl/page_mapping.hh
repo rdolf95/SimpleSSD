@@ -64,19 +64,28 @@ class PageMapping : public AbstractFTL {
   struct {
     uint16_t maxErrorCount;
     uint16_t minErrorCount;
-    uint16_t strongWindowSize;
-    uint16_t weakWindowSize;
+    uint16_t strongBoundary;
+    uint16_t weakBoundary;
   } wearLevelingStat;
 
   // Table for handle blocks with # of errors
   std::vector<std::pair<std::list<Block>, std::list<uint32_t>>>
       errorCountTable;
 
+  std::vector<uint32_t> errorCountStat;
+  
+  std::vector<vector<uint32_t>> lastFreeBlock2;
+  std::vector<Bitset> lastFreeBlockIOMap2;
+  std::vector<uint32_t> lastFreeBlockIndex2;
+
   // LRU window for hot/cold identification
   // list of (LBA, access count)
   std::list<std::pair<uint32_t, uint32_t>> lruWindow;
   uint32_t lruAverage;
   uint32_t lruWindowSize;
+  uint32_t vulBlockCount;
+  uint32_t badBlockCount;
+  uint32_t testCount = 0;
 
   // BER data
   double initialBER;
@@ -100,13 +109,13 @@ class PageMapping : public AbstractFTL {
   void eraseInternal(PAL::Request &, uint64_t &);
 
   // Page mapping scheme for BER wearleveling
-  uint32_t getFreeBlock2(uint16_t);
-  uint32_t getLastFreeBlock2(Bitset&, uint8_t);
+  uint32_t getFreeBlock2(uint16_t, uint32_t);
+  uint32_t getLastFreeBlock2(Bitset&, uint32_t);
   void eraseInternal2(PAL::Request &, uint64_t &);
 
   void readInternal2(Request &, uint64_t &);
   void writeInternal2(Request &, uint64_t &, bool = true);
-  void updateLRU(uint32_t);
+  uint32_t updateLRU(uint32_t);
 
  public:
   PageMapping(ConfigReader &, Parameter &, PAL::PAL *, DRAM::AbstractDRAM *);
