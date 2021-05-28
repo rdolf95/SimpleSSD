@@ -389,6 +389,10 @@ void Block::updateErrorTableIndex(uint32_t newErrorTableIndex){
   errorTableIndex = newErrorTableIndex;
 }
 
+void Block::updateEraseCount(uint32_t newEraseCount){
+  eraseCount = newEraseCount;
+}
+
 }  // namespace FTL
 
 }  // namespace SimpleSSD

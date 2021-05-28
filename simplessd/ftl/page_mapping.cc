@@ -58,9 +58,51 @@ PageMapping::PageMapping(ConfigReader &c, Parameter &p, PAL::PAL *l,
     std::list<uint32_t> validList;
     errorCountTable.push_back(make_pair(freeList, validList));
   }
+
+
+  // BER modeling data  
+  static uint64_t eraseThreshold =
+      conf.readUint(CONFIG_FTL, FTL_BAD_BLOCK_THRESHOLD);
+  static float initialBER =
+      conf.readFloat(CONFIG_FTL, FTL_INITIAL_BER);
+  static float finalBER =
+      conf.readFloat(CONFIG_FTL, FTL_FINAL_BER);
+  static float sigma =
+      conf.readFloat(CONFIG_FTL, FTL_BER_SIGMA);
+
+  // BER modeling random generator
+  std::random_device generator;
+  uint32_t errorCount;
+  float averageError;
+  float temp;
+
+  sigma = 2;
+
+
   for (uint32_t i = 0; i < param.totalPhysicalBlocks; i++) {
-    errorCountTable[0].first.emplace_back(Block(i, param.pagesInBlock, param.ioUnitInPage));
+    averageError = (finalBER - initialBER)/eraseThreshold
+                      * 100 + initialBER;
+    averageError = averageError * param.pageSize * 8;
+    std::normal_distribution<double> normal(averageError,sigma);
+
+    // Remove negative value
+    temp = normal(generator);
+    if (temp < 0){
+      temp = 0;
+    }
+
+    // Keep maximum error count ever seen
+    errorCount = MAX(static_cast<uint32_t>(temp + 0.5), 0);
+    if(errorCount>=128){
+      errorCount = 127;
+    }
+    
+    errorCountTable[errorCount].first.emplace_back(Block(i, param.pagesInBlock, param.ioUnitInPage));
+    errorCountTable[errorCount].first.back().updateError(errorCount);
+    errorCountTable[errorCount].first.back().updateEraseCount(100);
+    errorCountStat[errorCount] ++;
   }
+
   lruWindowSize = conf.readInt(CONFIG_FTL, FTL_LRU_MAX);
   vulBlockCount = 0;
   badBlockCount = 0;
@@ -92,10 +134,10 @@ PageMapping::PageMapping(ConfigReader &c, Parameter &p, PAL::PAL *l,
   memset(&wearLevelingStat, 0, sizeof(wearLevelingStat));
   
   wearLevelingStat.minErrorCount = 0;
-  wearLevelingStat.strongBoundary = 10;
-  wearLevelingStat.weakBoundary = 20;
+  wearLevelingStat.strongBoundary = 32;
+  wearLevelingStat.weakBoundary = 40;
 
-  errorCountStat[0] = param.totalPhysicalBlocks;
+
 
   bRandomTweak = conf.readBoolean(CONFIG_FTL, FTL_USE_RANDOM_IO_TWEAK);
   bitsetSize = bRandomTweak ? param.ioUnitInPage : 1;
@@ -444,11 +486,8 @@ uint32_t PageMapping::getFreeBlock2(uint16_t errorIdx, uint32_t isHot) {
   // Find free block with more than errorIdx
   //auto tableIter = errorCountTable.begin() + errorIdx;
   auto tableIter = errorCountTable.begin();
-
   if (isHot == 1) // Hot
   {  
-
-
     uint32_t iterCount = minError;
     tableIter = errorCountTable.begin();
     while (tableIter->first.empty() && (iterCount < strongBoundary))
@@ -460,8 +499,11 @@ uint32_t PageMapping::getFreeBlock2(uint16_t errorIdx, uint32_t isHot) {
     while (tableIter->first.empty() && (iterCount < weakBoundary))
     { // Weak blocks
       iterCount ++;
-      wearLevelingStat.strongBoundary ++;
       tableIter = errorCountTable.begin() + iterCount;
+    }
+    
+    if(!(tableIter->first.empty())){
+      wearLevelingStat.strongBoundary = iterCount;
     }
     
     while (tableIter->first.empty() && (tableIter != errorCountTable.end()))
@@ -482,13 +524,11 @@ uint32_t PageMapping::getFreeBlock2(uint16_t errorIdx, uint32_t isHot) {
     while (tableIter->first.empty() && (iterCount > minError))
     { // Strong blocks
       iterCount --;
-      wearLevelingStat.strongBoundary --;
       tableIter = errorCountTable.begin() + iterCount;
     }
 
-    if (tableIter->first.empty())
-    {
-      tableIter ++;
+    if(!(tableIter->first.empty())){
+      wearLevelingStat.strongBoundary = iterCount;
     }
     
     while (tableIter->first.empty() && (tableIter != errorCountTable.end()))
@@ -532,7 +572,6 @@ uint32_t PageMapping::getFreeBlock2(uint16_t errorIdx, uint32_t isHot) {
 }
 
 uint32_t PageMapping::getLastFreeBlock2(Bitset &iomap, uint32_t isHot) {
-  
   //isHot == 0 : cold, isHot == 1 : hot
   if (!bRandomTweak || (lastFreeBlockIOMap2[isHot] & iomap).any()) {
     // Update lastFreeBlockIndex
@@ -1082,10 +1121,10 @@ void PageMapping::writeInternal2(Request &req, uint64_t &tick, bool sendToPAL) {
   uint32_t errorCount;
   float averageError;
   float temp;
-  //uint32_t isHot;
+  uint32_t isHot;
   
-  //isHot = updateLRU(req.lpn);
-  updateLRU(req.lpn);
+  isHot = updateLRU(req.lpn);
+  //updateLRU(req.lpn);
 
 
   if (mappingList != table.end()) {
@@ -1118,7 +1157,7 @@ void PageMapping::writeInternal2(Request &req, uint64_t &tick, bool sendToPAL) {
   }
 
   // Write data to free block
-  block = blocks.find(getLastFreeBlock2(req.ioFlag, 1));
+  block = blocks.find(getLastFreeBlock2(req.ioFlag, isHot));
 
   if (block == blocks.end()) {
     panic("No such block");
@@ -1196,9 +1235,9 @@ void PageMapping::writeInternal2(Request &req, uint64_t &tick, bool sendToPAL) {
 
       // Keep maximum error count ever seen
       errorCount = MAX(static_cast<uint32_t>(temp + 0.5), block->second.getBitErrorCount());
-      if(errorCount>=128){
-        errorCount = 127;
-      }
+      //if(errorCount>=128){
+      //  errorCount = 127;
+      //}
       block->second.updateError(errorCount);
 
 
@@ -1342,6 +1381,7 @@ void PageMapping::eraseInternal2(PAL::Request &req, uint64_t &tick) {
   uint32_t blockIdx = block->second.getBlockIndex();
   uint32_t errorCount = block->second.getBitErrorCount();
   uint32_t errorTableIndex = block->second.getErrorTableIndex();
+  
 
 
   // Erase block
@@ -1360,10 +1400,15 @@ void PageMapping::eraseInternal2(PAL::Request &req, uint64_t &tick) {
     tableIter->first.emplace_back(std::move(block->second));
     badBlockCount ++;
   }
+  else{
+    // for stat
+    errorCount = 127;
+  }
 
   // Remove block from available block list
   // First find block from valid list
   auto iter = errorCountTable[errorTableIndex].second.begin();
+
   while(iter != errorCountTable[errorTableIndex].second.end()){
     if(*iter == blockIdx){
       break;

@@ -80,6 +80,7 @@ class Block {
   uint32_t getErrorTableIndex();
   void updateError(uint32_t);
   void updateErrorTableIndex(uint32_t);
+  void updateEraseCount(uint32_t);
 
 };
 
