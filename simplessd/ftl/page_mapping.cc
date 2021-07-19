@@ -45,28 +45,13 @@ PageMapping::PageMapping(ConfigReader &c, Parameter &p, PAL::PAL *l,
     freeBlocks.emplace_back(Block(i, param.pagesInBlock, param.ioUnitInPage));
   }
 
-  // Push free blocks to free block list of error count = 0
-
-  for (uint32_t i = 0; i < 128; i++){
-    list<Block> freeList;
-    list<uint32_t> validList;
-    errorCountTable.push_back(make_pair(freeList, validList));
-  }
-  for (uint32_t i = 0; i < param.totalPhysicalBlocks; i++) {
-    errorCountTable[0].first.emplace_back(Block(i, param.pagesInBlock, param.ioUnitInPage));
-  }
-
   nFreeBlocks = param.totalPhysicalBlocks;
 
   status.totalLogicalPages = param.totalLogicalBlocks * param.pagesInBlock;
 
   // Allocate free blocks
-  //for (uint32_t i = 0; i < param.pageCountToMaxPerf; i++) {
-  //  lastFreeBlock.at(i) = getFreeBlock(i);
-  //}
-
   for (uint32_t i = 0; i < param.pageCountToMaxPerf; i++) {
-    lastFreeBlock.at(i) = getFreeBlock2(0);
+    lastFreeBlock.at(i) = getFreeBlock(i);
   }
 
   lastFreeBlockIndex = 0;
@@ -201,7 +186,7 @@ void PageMapping::read(Request &req, uint64_t &tick) {
   uint64_t begin = tick;
 
   if (req.ioFlag.count() > 0) {
-    readInternal2(req, tick);
+    readInternal(req,tick);
 
     debugprint(LOG_FTL_PAGE_MAPPING,
                "READ  | LPN %" PRIu64 " | %" PRIu64 " - %" PRIu64 " (%" PRIu64
@@ -384,116 +369,10 @@ uint32_t PageMapping::getLastFreeBlock(Bitset &iomap) {
 
   // If current free block is full, get next block
   if (freeBlock->second.getNextWritePageIndex() == param.pagesInBlock) {
-    //lastFreeBlock.at(lastFreeBlockIndex) = getFreeBlock(lastFreeBlockIndex);
-    lastFreeBlock.at(lastFreeBlockIndex) = getFreeBlock2(0);
-    bReclaimMore = true;
-  }
-  
-
-  return lastFreeBlock.at(lastFreeBlockIndex);
-}
-
-/*
-  errorIdx : index of errorCountTable 
-             It should be 
-             minErrorCount or,
-             minErrorCount + strongSize or,
-             minErrorCount + strongSize + weakSize
-*/
-uint32_t PageMapping::getFreeBlock2(uint16_t errorIdx) {
-  uint32_t blockIndex = 0;
-  uint16_t minError = wearLevelingStat.minErrorCount;
-  uint16_t strongBoundary = minError + wearLevelingStat.strongWindowSize;
-  uint16_t weakBoundary = strongBoundary + wearLevelingStat.weakWindowSize;
-
-  // TODO: For testing
-  minError = 0;
-  
-  if (errorIdx != minError 
-      || errorIdx != strongBoundary
-      || errorIdx != weakBoundary) {
-    panic("Unallowed free page request");
-  }
-
-  // Find free block with more than errorIdx
-  auto tableIter = errorCountTable.begin() + errorIdx;
-  while (tableIter->first.empty())
-  {
-    tableIter ++;
-  }
-
-  // TODO: Must adjust boundaries of strong/weak if table Iter exceeded them.
-  if (tableIter != errorCountTable.end())
-  {
-    // Use first one of minimum 
-    blockIndex = tableIter->first.front().getBlockIndex();
-    // TODO: How to check the block is already available?
-    //if (blocks.find(blockIndex) != blocks.end()) {
-    //  panic("Corrupted");
-    //}
-
-    // Save error count table index to block meta data
-    uint32_t errorCount = tableIter->first.front().getBitErrorCount();
-    tableIter->first.front().updateErrorTableIndex(errorCount);
-
-    // Insert found block to valid block list
-    auto newTableIter = errorCountTable.begin() + errorCount;
-    newTableIter->second.emplace_back(std::move(tableIter->first.front().getBlockIndex()));
-
-    
-    if (blocks.find(blockIndex) != blocks.end()) {
-      panic("Corrupted");
-    }
-
-    blocks.emplace(blockIndex, std::move(tableIter->first.front()));
-
-
-
-    // Remove found block from free block list
-    tableIter->first.pop_front();
-    nFreeBlocks--;
-  }
-  else{
-    panic("No free block left");
-  }
-
-  return blockIndex;
-}
-
-uint32_t PageMapping::getLastFreeBlock2(Bitset &iomap, uint8_t dataType) {
-
-  if(dataType ==0){
-    dataType = 1;
-  }
-
-  // TODO: Make 3 of last free block Index, update according to dataType 
-  if (!bRandomTweak || (lastFreeBlockIOMap & iomap).any()) {
-    // Update lastFreeBlockIndex
-    lastFreeBlockIndex++;
-
-    if (lastFreeBlockIndex == param.pageCountToMaxPerf) {
-      lastFreeBlockIndex = 0;
-    }
-
-    lastFreeBlockIOMap = iomap;
-  }
-  else {
-    lastFreeBlockIOMap |= iomap;
-  }
-
-  auto freeBlock = blocks.find(lastFreeBlock.at(lastFreeBlockIndex));
-
-  // Sanity check
-  if (freeBlock == blocks.end()) {
-    panic("Corrupted");
-  }
-
-  // If current free block is full, get next block
-  if (freeBlock->second.getNextWritePageIndex() == param.pagesInBlock) {
     lastFreeBlock.at(lastFreeBlockIndex) = getFreeBlock(lastFreeBlockIndex);
-
     bReclaimMore = true;
   }
+  
 
   return lastFreeBlock.at(lastFreeBlockIndex);
 }
@@ -729,8 +608,7 @@ void PageMapping::doGarbageCollection(std::vector<uint32_t> &blocksToReclaim,
   for (auto &iter : eraseRequests) {
     beginAt = readFinishedAt;
 
-    //eraseInternal(iter, beginAt);
-    eraseInternal2(iter, beginAt);
+    eraseInternal(iter, beginAt);
     
     eraseFinishedAt = MAX(eraseFinishedAt, beginAt);
   }
@@ -783,103 +661,6 @@ void PageMapping::readInternal(Request &req, uint64_t &tick) {
           pPAL->read(palRequest, beginAt);
 
           finishedAt = MAX(finishedAt, beginAt);
-        }
-      }
-    }
-
-    tick = finishedAt;
-    tick += applyLatency(CPU::FTL__PAGE_MAPPING, CPU::READ_INTERNAL);
-  }
-}
-
-void PageMapping::readInternal2(Request &req, uint64_t &tick) {
-  PAL::Request palRequest(req);
-  uint64_t beginAt;
-  uint64_t finishedAt = tick;
-
-  // BER modeling data  
-  static uint64_t eraseThreshold =
-      conf.readUint(CONFIG_FTL, FTL_BAD_BLOCK_THRESHOLD);
-  static float initialBER =
-      conf.readFloat(CONFIG_FTL, FTL_INITIAL_BER);
-  static float finalBER =
-      conf.readFloat(CONFIG_FTL, FTL_FINAL_BER);
-  static float sigma =
-      conf.readFloat(CONFIG_FTL, FTL_BER_SIGMA);
-  
-  // BER modeling random generator
-  std::random_device generator;
-  uint32_t errorCount;
-  float averageError;
-  float temp;
-
-  //debugprint(LOG_FTL_PAGE_MAPPING, "threshold: %d", eraseThreshold);
-  //debugprint(LOG_FTL_PAGE_MAPPING, "initial BER: %.12lf", initialBER);
-  //debugprint(LOG_FTL_PAGE_MAPPING, "final BER: %lf", finalBER);
-  //debugprint(LOG_FTL_PAGE_MAPPING, "BER sigma: %lf", sigma);
-  //ssdfsdfsdfds
-  
-  auto mappingList = table.find(req.lpn);
-
-  if (mappingList != table.end()) {
-    if (bRandomTweak) {
-      pDRAM->read(&(*mappingList), 8 * req.ioFlag.count(), tick);
-    }
-    else {
-      pDRAM->read(&(*mappingList), 8, tick);
-    }
-
-    for (uint32_t idx = 0; idx < bitsetSize; idx++) {
-      if (req.ioFlag.test(idx) || !bRandomTweak) {
-        auto &mapping = mappingList->second.at(idx);
-
-        if (mapping.first < param.totalPhysicalBlocks &&
-            mapping.second < param.pagesInBlock) {
-          palRequest.blockIndex = mapping.first;
-          palRequest.pageIndex = mapping.second;
-
-          if (bRandomTweak) {
-            palRequest.ioFlag.reset();
-            palRequest.ioFlag.set(idx);
-          }
-          else {
-            palRequest.ioFlag.set();
-          }
-
-          auto block = blocks.find(palRequest.blockIndex);
-
-          if (block == blocks.end()) {
-            panic("Block is not in use");
-          }
-
-          beginAt = tick;
-
-          block->second.read(palRequest.pageIndex, idx, beginAt);
-          pPAL->read(palRequest, beginAt);
-
-          finishedAt = MAX(finishedAt, beginAt);
-          
-          // TODO: error should be updated only right after write.
-
-          averageError = (finalBER - initialBER)/eraseThreshold
-                         * (block->second.getEraseCount()) + initialBER;
-          averageError = averageError * param.pageSize * 8;
-          std::normal_distribution<double> normal(averageError,sigma);
-
-          // Dillema : Is it okay to use maximum error count?
-          // What if very huge value is selected at first?
-          // Remove negative value
-          temp = normal(generator);
-          if (temp < 0){
-            temp = 0;
-          }
-
-          //debugprint(LOG_FTL_PAGE_MAPPING, "average error: %.12lf", averageError);
-          //debugprint(LOG_FTL_PAGE_MAPPING, "rand var: %.12lf", temp);
-          // Keep maximum error count ever seen
-          errorCount = MAX(static_cast<uint32_t>(temp + 0.5), block->second.getBitErrorCount());
-          //debugprint(LOG_FTL_PAGE_MAPPING, "cur error count: %u", errorCount);
-          block->second.updateError(errorCount);
         }
       }
     }
@@ -1111,60 +892,6 @@ void PageMapping::eraseInternal(PAL::Request &req, uint64_t &tick) {
   tick += applyLatency(CPU::FTL__PAGE_MAPPING, CPU::ERASE_INTERNAL);
 }
 
-void PageMapping::eraseInternal2(PAL::Request &req, uint64_t &tick) {
-  static uint64_t threshold =
-      conf.readUint(CONFIG_FTL, FTL_BAD_BLOCK_THRESHOLD);
-  auto block = blocks.find(req.blockIndex);
-
-  // Sanity checks
-  if (block == blocks.end()) {
-    panic("No such block");
-  }
-
-  if (block->second.getValidPageCount() != 0) {
-    panic("There are valid pages in victim block");
-  }
-
-  // Erase block
-  block->second.erase();
-
-  pPAL->erase(req, tick);
-
-  // Check error count
-  uint32_t erasedCount = block->second.getEraseCount();
-  uint32_t errorCount = block->second.getBitErrorCount();
-  auto tableIter = errorCountTable.begin() + errorCount;
-
-  if (erasedCount < threshold) {
-    // Push to back of free list
-    tableIter->first.emplace_back(std::move(block->second));
-  }
-
-  // Remove block from available block list
-  // First find block from valid list
-  uint32_t errorTableIndex = block->second.getErrorTableIndex();
-  auto iter = errorCountTable[errorTableIndex].second.begin();
-  
-  while(iter != errorCountTable[errorTableIndex].second.end()){
-    if(*iter == block->second.getBlockIndex()){
-      break;
-    }
-  }
-
-  // Sanity check
-  if (iter == errorCountTable[errorTableIndex].second.end())
-  {
-    panic("Block is lost in availabe list");
-  }
-  
-  // Erase from valid list and metadata list
-  iter = errorCountTable[errorTableIndex].second.erase(iter);
-  blocks.erase(block);
-
-  nFreeBlocks++;
-
-  tick += applyLatency(CPU::FTL__PAGE_MAPPING, CPU::ERASE_INTERNAL);
-}
 
 float PageMapping::calculateWearLeveling() {
   uint64_t totalEraseCnt = 0;

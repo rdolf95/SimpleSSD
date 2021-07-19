@@ -60,21 +60,7 @@ class PageMapping : public AbstractFTL {
     uint64_t validPageCopies;
   } stat;
 
-  // Stat for wear leveling
-  struct {
-    uint16_t maxErrorCount;
-    uint16_t minErrorCount;
-    uint16_t strongWindowSize;
-    uint16_t weakWindowSize;
-  } wearLevelingStat;
 
-  // Table for handle blocks with # of errors
-  std::vector<std::pair<std::list<Block>, std::list<uint32_t>>>
-      errorCountTable;
-
-  // BER data
-  double initialBER;
-  double finalBER;
 
   float freeBlockRatio();
   uint32_t convertBlockIdx(uint32_t);
@@ -92,13 +78,6 @@ class PageMapping : public AbstractFTL {
   void writeInternal(Request &, uint64_t &, bool = true);
   void trimInternal(Request &, uint64_t &);
   void eraseInternal(PAL::Request &, uint64_t &);
-
-  // Page mapping scheme for BER wearleveling
-  uint32_t getFreeBlock2(uint16_t);
-  uint32_t getLastFreeBlock2(Bitset&, uint8_t);
-  void eraseInternal2(PAL::Request &, uint64_t &);
-
-  void readInternal2(Request &, uint64_t &);
 
  public:
   PageMapping(ConfigReader &, Parameter &, PAL::PAL *, DRAM::AbstractDRAM *);
