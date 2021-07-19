@@ -69,6 +69,8 @@ PageMapping::PageMapping(ConfigReader &c, Parameter &p, PAL::PAL *l,
       conf.readFloat(CONFIG_FTL, FTL_FINAL_BER);
   static float sigma =
       conf.readFloat(CONFIG_FTL, FTL_BER_SIGMA);
+  static uint64_t initErase =
+    conf.readInt(CONFIG_FTL, FTL_INITIAL_ERASE);
 
   // BER modeling random generator
   std::random_device generator;
@@ -81,7 +83,7 @@ PageMapping::PageMapping(ConfigReader &c, Parameter &p, PAL::PAL *l,
 
   for (uint32_t i = 0; i < param.totalPhysicalBlocks; i++) {
     averageError = (finalBER - initialBER)/eraseThreshold
-                      * 100 + initialBER;
+                      * initErase + initialBER;
     averageError = averageError * param.pageSize * 8;
     std::normal_distribution<double> normal(averageError,sigma);
 
@@ -99,7 +101,7 @@ PageMapping::PageMapping(ConfigReader &c, Parameter &p, PAL::PAL *l,
     
     errorCountTable[errorCount].first.emplace_back(Block(i, param.pagesInBlock, param.ioUnitInPage));
     errorCountTable[errorCount].first.back().updateError(errorCount);
-    errorCountTable[errorCount].first.back().updateEraseCount(100);
+    errorCountTable[errorCount].first.back().updateEraseCount(initErase);
     errorCountStat[errorCount] ++;
   }
 
@@ -134,8 +136,8 @@ PageMapping::PageMapping(ConfigReader &c, Parameter &p, PAL::PAL *l,
   memset(&wearLevelingStat, 0, sizeof(wearLevelingStat));
   
   wearLevelingStat.minErrorCount = 0;
-  wearLevelingStat.strongBoundary = 32;
-  wearLevelingStat.weakBoundary = 40;
+  wearLevelingStat.strongBoundary = 32;//32 //65
+  wearLevelingStat.weakBoundary = 40;//40 //75
 
 
 
@@ -909,7 +911,14 @@ void PageMapping::readInternal2(Request &req, uint64_t &tick) {
   uint64_t beginAt;
   uint64_t finishedAt = tick;
 
-  updateLRU(req.lpn);
+  static const WL_POLICY wlMode =
+      (WL_POLICY)conf.readInt(CONFIG_FTL, FTL_WL_MODE);
+  
+  if (wlMode == WL_DYNAMIC)
+  {
+    updateLRU(req.lpn);
+  }
+
   auto mappingList = table.find(req.lpn);
 
   if (mappingList != table.end()) {
@@ -1122,9 +1131,22 @@ void PageMapping::writeInternal2(Request &req, uint64_t &tick, bool sendToPAL) {
   float averageError;
   float temp;
   uint32_t isHot;
+
+  static const WL_POLICY wlMode =
+        (WL_POLICY)conf.readInt(CONFIG_FTL, FTL_WL_MODE);
   
-  isHot = updateLRU(req.lpn);
+  if (wlMode == WL_GREEDY)
+  {
+    isHot = 1;
+  }
+  else
+  {
+    isHot = updateLRU(req.lpn);
+  }
   //updateLRU(req.lpn);
+
+  
+
 
 
   if (mappingList != table.end()) {

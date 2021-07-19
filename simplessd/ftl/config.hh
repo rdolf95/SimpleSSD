@@ -50,9 +50,11 @@ typedef enum {
   FTL_INITIAL_BER,
   FTL_FINAL_BER,
   FTL_BER_SIGMA,
+  FTL_INITIAL_ERASE,
 
   /* LRU window */
   FTL_LRU_MAX,
+  FTL_WL_MODE,
 
   /* ECC capability */
   FTL_ECC_CAPABILITY,
@@ -81,6 +83,11 @@ typedef enum {
   POLICY_DCHOICE,
 } EVICT_POLICY;
 
+typedef enum {
+  WL_GREEDY,  // Select the block with the least valid pages
+  WL_DYNAMIC,
+} WL_POLICY;
+
 class Config : public BaseConfig {
  private:
   MAPPING mapping;             //!< Default: PAGE_MAPPING
@@ -101,9 +108,11 @@ class Config : public BaseConfig {
   float initialBER;            //!< Default: 10^-12
   float finalBER;              //!< Default: 10^-3
   float normalSigma;               //!< Default: 1
+  uint64_t initialErase;
 
   //Config for LRU window
   uint64_t lruWindowSize;
+  WL_POLICY wlPolicy; 
 
   //Config for ECC capability
   uint64_t eccCapability;

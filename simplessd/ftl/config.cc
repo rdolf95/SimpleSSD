@@ -46,6 +46,9 @@ const char NAME_BER_SIGMA[] = "BERSigma";
 const char NAME_LRU_WINDOW_SIZE[] = "LRUWindowSize";
 const char NAME_ECC_CAPABILITY[] = "ECCCapability";
 
+const char NAME_INITIAL_ERASE[] = "InitialErase";
+const char NAME_WL_MODE[] = "WearLevelingMode";
+
 Config::Config() {
   mapping = PAGE_MAPPING;
   overProvision = 0.25f;
@@ -66,6 +69,9 @@ Config::Config() {
   normalSigma = 1;
   lruWindowSize = 200;
   eccCapability = 128;
+
+  initialErase = 100;
+  wlPolicy = WL_DYNAMIC;
 }
 
 bool Config::setConfig(const char *name, const char *value) {
@@ -126,6 +132,12 @@ bool Config::setConfig(const char *name, const char *value) {
   else if (MATCH_NAME(NAME_LRU_WINDOW_SIZE)) {
     eccCapability = strtoul(value, nullptr, 10);
   }
+  else if (MATCH_NAME(NAME_INITIAL_ERASE)) {
+    initialErase = strtoul(value, nullptr, 10);
+  }
+  else if (MATCH_NAME(NAME_WL_MODE)) {
+    wlPolicy = (WL_POLICY)strtoul(value, nullptr, 10);
+  }
 
   else {
     ret = false;
@@ -170,6 +182,12 @@ int64_t Config::readInt(uint32_t idx) {
       break;
     case FTL_ECC_CAPABILITY:
       ret = eccCapability;
+      break;
+    case FTL_INITIAL_ERASE:
+      ret = initialErase;
+      break;
+    case FTL_WL_MODE:
+      ret = wlPolicy;
       break;
   }
 
